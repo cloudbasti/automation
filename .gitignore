@@ -1,0 +1,7 @@
+# ignore files with IP adresses
+**/inventory*.yml
+**/hosts*.yml
+
+# But supply templates in git
+!**/inventory_template.yml
+!**/hosts_template.yml
