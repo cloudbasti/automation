@@ -1,6 +1,7 @@
 ---
 - hosts: k8_master
   become: true
+
   tasks:
     - name: Install prerequisites
       apt:
@@ -68,3 +69,29 @@
         - kubeadm
         - kubelet
         - kubectl
+
+    - name: Initialize Kubernetes master
+      command: kubeadm init --pod-network-cidr=10.244.0.0/16
+      register: kubeadm_output
+      ignore_errors: yes
+
+    - name: Create .kube directory
+      file:
+        path: /home/ubuntu/.kube
+        state: directory
+        owner: ubuntu
+        group: ubuntu
+        mode: '0755'
+
+    - name: Copy admin.conf to user's kube config
+      copy:
+        src: /etc/kubernetes/admin.conf
+        dest: /home/ubuntu/.kube/config
+        remote_src: yes
+        owner: ubuntu
+        group: ubuntu
+        mode: '0644'
+
+    - name: Install Calico network plugin
+      become: false
+      command: kubectl apply -f https://docs.projectcalico.org/manifests/calico.yaml 
