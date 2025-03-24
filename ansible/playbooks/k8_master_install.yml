@@ -3,6 +3,51 @@
   become: true
 
   tasks:
+    # Disable swap
+    - name: Disable swap immediately
+      command: swapoff -a
+      
+    - name: Remove swap from fstab
+      lineinfile:
+        path: /etc/fstab
+        regexp: '^([^#].*\sswap\s+sw\s+.*)$'
+        line: '# \1'
+        backrefs: yes
+        state: present
+      
+    # Load kernel modules
+    - name: Load overlay kernel module
+      community.general.modprobe:
+        name: overlay
+        state: present
+        
+    - name: Load br_netfilter kernel module
+      community.general.modprobe:
+        name: br_netfilter
+        state: present
+        
+    - name: Make kernel modules persistent
+      lineinfile:
+        path: /etc/modules-load.d/k8s.conf
+        line: "{{ item }}"
+        create: yes
+        state: present
+      loop:
+        - overlay
+        - br_netfilter
+    
+    # Configure kernel parameters
+    - name: Configure kernel parameters for Kubernetes
+      blockinfile:
+        path: /etc/sysctl.d/kubernetes.conf
+        create: yes
+        block: |
+          net.bridge.bridge-nf-call-ip6tables = 1
+          net.bridge.bridge-nf-call-iptables = 1
+          net.ipv4.ip_forward = 1
+      
+    - name: Apply sysctl changes
+      command: sysctl --system
     - name: Install prerequisites
       apt:
         name:
@@ -73,7 +118,7 @@
     - name: Initialize Kubernetes master
       command: kubeadm init --pod-network-cidr=10.244.0.0/16
       register: kubeadm_output
-      ignore_errors: yes
+      ignore_errors: true
 
     - name: Create .kube directory
       file:
