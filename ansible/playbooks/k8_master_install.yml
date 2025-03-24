@@ -1,5 +1,5 @@
 ---
-- hosts: k8_master
+- hosts: k8s_masters
   become: true
 
   tasks:
@@ -48,63 +48,104 @@
       
     - name: Apply sysctl changes
       command: sysctl --system
+    
     - name: Install prerequisites
       apt:
         name:
           - apt-transport-https
           - ca-certificates
           - curl
+          - gnupg
+          - lsb-release
+          - software-properties-common
         state: present
-        update_cache: false
+        update_cache: true
 
-    - name: Create keyrings directory
-      ansible.builtin.file:
+    # Set up containerd
+    - name: Create directory for containerd
+      file:
         path: /etc/apt/keyrings
         state: directory
         mode: '0755'
 
-    - name: Download Kubernetes repository key
-      ansible.builtin.get_url:
-        url: https://pkgs.k8s.io/core:/stable:/v1.32/deb/Release.key
-        dest: /tmp/kubernetes-release.key
+    - name: Download Docker GPG key
+      get_url:
+        url: https://download.docker.com/linux/ubuntu/gpg
+        dest: /tmp/docker.gpg
         mode: '0644'
 
-    - name: Dearmor GPG key
-      ansible.builtin.shell: |
-        cat /tmp/kubernetes-release.key | gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+    - name: Add Docker GPG key
+      shell: cat /tmp/docker.gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
       args:
-        creates: /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+        creates: /etc/apt/keyrings/docker.gpg
 
-    - name: Check key file permissions
-      ansible.builtin.stat:
-        path: /etc/apt/keyrings/kubernetes-apt-keyring.gpg
-      register: key_file
-
-    - name: Set correct permissions for key
-      ansible.builtin.file:
-        path: /etc/apt/keyrings/kubernetes-apt-keyring.gpg
-        mode: '0644'
-      when: key_file.stat.exists and key_file.stat.mode != '0644'
-
-    - name: Add Kubernetes repository (fixed format)
-      copy:
-        dest: /etc/apt/sources.list.d/kubernetes.list
-        content: "deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v1.32/deb/ /"
-        mode: '0644'
-
-    - name: Set correct permissions for repo file
-      file:
-        path: /etc/apt/sources.list.d/kubernetes.list
-        mode: '0644'
+    - name: Add Docker repository
+      shell: |
+        echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" | tee /etc/apt/sources.list.d/docker.list
+      args:
+        creates: /etc/apt/sources.list.d/docker.list
 
     - name: Update apt cache
       apt:
         update_cache: true
 
-    - name: Install Docker
+    - name: Install containerd
       apt:
-        name: docker.io
+        name: containerd.io
         state: present
+
+    - name: Create containerd directory
+      file:
+        path: /etc/containerd
+        state: directory
+        mode: '0755'
+
+    - name: Configure containerd
+      shell: containerd config default | tee /etc/containerd/config.toml
+      args:
+        creates: /etc/containerd/config.toml
+
+    - name: Update containerd configuration with SystemdCgroup
+      lineinfile:
+        path: /etc/containerd/config.toml
+        regexp: '^\s+SystemdCgroup = false'
+        line: '            SystemdCgroup = true'
+        state: present
+
+    - name: Restart containerd
+      systemd:
+        name: containerd
+        state: restarted
+        enabled: yes
+
+    # Set up Kubernetes
+    - name: Create keyrings directory for Kubernetes
+      file:
+        path: /etc/apt/keyrings
+        state: directory
+        mode: '0755'
+
+    - name: Download Kubernetes repository key
+      get_url:
+        url: https://pkgs.k8s.io/core:/stable:/v1.32/deb/Release.key
+        dest: /tmp/kubernetes-release.key
+        mode: '0644'
+
+    - name: Dearmor GPG key
+      shell: |
+        cat /tmp/kubernetes-release.key | gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+      args:
+        creates: /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+
+    - name: Add Kubernetes repository
+      copy:
+        dest: /etc/apt/sources.list.d/kubernetes.list
+        content: "deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v1.32/deb/ /"
+        mode: '0644'
+
+    - name: Update apt cache
+      apt:
+        update_cache: true
 
     - name: Install kubeadm, kubelet, and kubectl
       apt:
@@ -114,6 +155,24 @@
         - kubeadm
         - kubelet
         - kubectl
+
+    - name: Hold Kubernetes packages
+      shell: apt-mark hold {{ item }}
+      loop:
+        - kubeadm
+        - kubelet
+        - kubectl
+
+    - name: Get primary network interface IP
+      shell: hostname -I | awk '{print $1}'
+      register: host_ip
+      changed_when: false
+
+    - name: Add node entries to /etc/hosts
+      lineinfile:
+        path: /etc/hosts
+        line: "{{ host_ip.stdout }} k8scp"
+        state: present
 
     - name: Initialize Kubernetes master
       command: kubeadm init --pod-network-cidr=10.244.0.0/16
@@ -139,4 +198,16 @@
 
     - name: Install Calico network plugin
       become: false
-      command: kubectl apply -f https://docs.projectcalico.org/manifests/calico.yaml 
+      command: kubectl apply -f https://docs.projectcalico.org/manifests/calico.yaml
+
+    - name: Install bash-completion
+      apt:
+        name: bash-completion
+        state: present
+
+    - name: Configure kubectl bash completion
+      lineinfile:
+        path: /home/ubuntu/.bashrc
+        line: 'source <(kubectl completion bash)'
+        state: present
+        create: yes
