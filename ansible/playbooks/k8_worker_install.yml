@@ -1,8 +1,9 @@
 ---
-- hosts: k8_workers
+- hosts: k8_worker
   become: true
   vars:
-    master_ip: "{{ hostvars['k8_master']['host_ip']['stdout'] | default(hostvars['k8_master']['ansible_default_ipv4']['address']) }}"
+    master_ip: "{{ hostvars[groups['k8_master'][0]]['ansible_host'] }}"
+
   tasks:
     - name: Update apt cache
       apt:
@@ -17,7 +18,7 @@
 
     - name: Copy join command from Ansible control node to worker
       copy:
-        src: ./k8s_join_command.sh
+        src: "{{ playbook_dir }}/../scripts/k8s_join_command.sh"
         dest: /tmp/k8s_join_command.sh
         mode: '0700'
 

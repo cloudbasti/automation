@@ -2,6 +2,10 @@
 **/inventory*.yml
 **/hosts*.yml
 
+
 # But supply templates in git
 !**/inventory_template.yml
 !**/hosts_template.yml
+
+#ignore cluster join command
+**/k8s_join_command.sh
