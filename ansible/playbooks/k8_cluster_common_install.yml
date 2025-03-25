@@ -109,34 +109,11 @@
         name: containerd.io
         state: present
 
-    - name: Stop containerd service
-      systemd:
-        name: containerd
-        state: stopped
-      ignore_errors: true
-
-    - name: Create containerd directory
-      file:
-        path: /etc/containerd
-        state: directory
-        mode: '0755'
-
-    - name: Configure containerd
-      shell: containerd config default | tee /etc/containerd/config.toml
-      args:
-        creates: /etc/containerd/config.toml
-
-    - name: Enable CRI in containerd config
-      lineinfile:
-        path: /etc/containerd/config.toml
-        regexp: 'disabled_plugins = \["cri"\]'
-        state: absent
-
-    - name: Update containerd configuration with SystemdCgroup
-      replace:
-        path: /etc/containerd/config.toml
-        regexp: 'SystemdCgroup = false'
-        replace: 'SystemdCgroup = true'
+    - name: Configure containerd with SystemdCgroup
+      shell: |
+        containerd config default | sudo tee /etc/containerd/config.toml
+        sudo sed -i 's/SystemdCgroup = false/SystemdCgroup = true/g' /etc/containerd/config.toml
+      become: true
 
     - name: Restart containerd
       systemd:
