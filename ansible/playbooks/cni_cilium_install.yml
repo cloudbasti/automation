@@ -1,0 +1,63 @@
+---
+- hosts: k8_master
+  become: true
+  tasks:
+    - name: Check kernel version (Cilium requires >= 5.4)
+      shell: uname -r
+      register: kernel_version
+      changed_when: false
+
+    - name: Display kernel version
+      debug:
+        msg: "Current kernel version: {{ kernel_version.stdout }}"
+
+    - name: Download Cilium CLI
+      shell: |
+        CILIUM_CLI_VERSION=$(curl -s https://raw.githubusercontent.com/cilium/cilium-cli/main/stable.txt)
+        CLI_ARCH=amd64
+        if [ "$(uname -m)" = "aarch64" ]; then CLI_ARCH=arm64; fi
+        curl -L --fail --remote-name-all https://github.com/cilium/cilium-cli/releases/download/${CILIUM_CLI_VERSION}/cilium-linux-${CLI_ARCH}.tar.gz{,.sha256sum}
+        sha256sum --check cilium-linux-${CLI_ARCH}.tar.gz.sha256sum
+      args:
+        chdir: /tmp
+        executable: /bin/bash
+      register: download_result
+      changed_when: download_result.rc == 0
+
+    - name: Extract Cilium CLI to /usr/local/bin
+      unarchive:
+        src: /tmp/cilium-linux-amd64.tar.gz
+        dest: /usr/local/bin
+        remote_src: yes
+      changed_when: true
+
+    - name: Cleanup temporary files
+      file:
+        path: "{{ item }}"
+        state: absent
+      with_items:
+        - /tmp/cilium-linux-amd64.tar.gz
+        - /tmp/cilium-linux-amd64.tar.gz.sha256sum
+      changed_when: true
+
+    - name: Install Cilium on the cluster
+      shell: cilium install
+      register: cilium_install
+      changed_when: cilium_install.rc == 0
+
+    - name: Wait for Cilium to be ready
+      shell: cilium status --wait
+      register: cilium_status
+      changed_when: false
+      retries: 10
+      delay: 30
+      until: cilium_status.rc == 0
+
+    - name: Display Cilium status
+      command: cilium status
+      register: cilium_status_output
+      changed_when: false
+
+    - name: Show Cilium status
+      debug:
+        var: cilium_status_output.stdout_lines

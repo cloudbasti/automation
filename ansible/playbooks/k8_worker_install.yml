@@ -1,82 +1,33 @@
 ---
-- hosts: k8_worker_one
+- hosts: k8_workers
   become: true
+  vars:
+    master_ip: "{{ hostvars['k8_master']['host_ip']['stdout'] | default(hostvars['k8_master']['ansible_default_ipv4']['address']) }}"
   tasks:
-    - name: Install prerequisites
-      apt:
-        name:
-          - apt-transport-https
-          - ca-certificates
-          - curl
-        state: present
-        update_cache: false
-
-    - name: Create keyrings directory
-      ansible.builtin.file:
-        path: /etc/apt/keyrings
-        state: directory
-        mode: '0755'
-
-    - name: Download Kubernetes repository key
-      ansible.builtin.get_url:
-        url: https://pkgs.k8s.io/core:/stable:/v1.32/deb/Release.key
-        dest: /tmp/kubernetes-release.key
-        mode: '0644'
-
-    - name: Dearmor GPG key
-      ansible.builtin.shell: |
-        cat /tmp/kubernetes-release.key | gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
-      args:
-        creates: /etc/apt/keyrings/kubernetes-apt-keyring.gpg
-
-    - name: Set correct permissions for key
-      ansible.builtin.file:
-        path: /etc/apt/keyrings/kubernetes-apt-keyring.gpg
-        mode: '0644'
-
-    - name: Add Kubernetes repository
-      copy:
-        dest: /etc/apt/sources.list.d/kubernetes.list
-        content: "deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v1.32/deb/ /"
-        mode: '0644'
-
     - name: Update apt cache
       apt:
-        update_cache: true
+        update_cache: yes
+        cache_valid_time: 3600
 
-    - name: Install Docker
-      apt:
-        name: docker.io
+    - name: Add master node entry to /etc/hosts
+      lineinfile:
+        path: /etc/hosts
+        line: "{{ master_ip }} k8scp"
         state: present
 
-    - name: Enable and start Docker service
-      systemd:
-        name: docker
-        state: started
-        enabled: true
-
-    - name: Install kubeadm, kubelet, and kubectl
-      apt:
-        name: "{{ item }}"
-        state: present
-      loop:
-        - kubeadm
-        - kubelet
-        - kubectl
-
-    - name: Enable kubelet service
-      systemd:
-        name: kubelet
-        enabled: true
-
-    - name: Create token on master node
-      ansible.builtin.shell: sudo kubeadm token create --ttl 30m --print-join-command
-      register: join_command_raw
-      delegate_to: k8_master
-      changed_when: false
-
+    - name: Copy join command from Ansible control node to worker
+      copy:
+        src: ./k8s_join_command.sh
+        dest: /tmp/k8s_join_command.sh
+        mode: '0700'
 
     - name: Join the worker node to the cluster
-      command: "{{ join_command_raw.stdout }}"
-      args:
-        creates: /etc/kubernetes/kubelet.conf
+      command: sh /tmp/k8s_join_command.sh
+      register: join_output
+      failed_when: join_output.rc != 0 and "already exists" not in join_output.stderr
+      changed_when: join_output.rc == 0
+
+    - name: Show join output
+      debug:
+        var: join_output.stdout_lines
+      when: join_output.stdout_lines is defined

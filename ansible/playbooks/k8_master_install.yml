@@ -20,10 +20,10 @@
         content: |
           apiVersion: kubeadm.k8s.io/v1beta4
           kind: ClusterConfiguration
-          kubernetesVersion: v1.32.3
+          kubernetesVersion: v1.31.5
           controlPlaneEndpoint: "{{ host_ip.stdout }}:6443"
           networking:
-            podSubnet: 10.244.0.0/16
+            podSubnet: 10.0.0.0/16  # Cilium recommended subnet
         mode: '0644'
 
     - name: Enable kubelet service
@@ -42,7 +42,20 @@
         dest: /root/kubeadm-init.out
         mode: '0644'
 
-    - name: Create .kube directory
+    - name: Create .kube directory for root
+      file:
+        path: /root/.kube
+        state: directory
+        mode: '0755'
+
+    - name: Copy admin.conf to root's kube config
+      copy:
+        src: /etc/kubernetes/admin.conf
+        dest: /root/.kube/config
+        remote_src: true
+        mode: '0600'
+
+    - name: Create .kube directory for ubuntu user
       file:
         path: /home/ubuntu/.kube
         state: directory
@@ -50,20 +63,27 @@
         group: ubuntu
         mode: '0755'
 
-    - name: Copy admin.conf to user's kube config
+    - name: Copy admin.conf to ubuntu user's kube config
       copy:
         src: /etc/kubernetes/admin.conf
         dest: /home/ubuntu/.kube/config
         remote_src: true
         owner: ubuntu
         group: ubuntu
-        mode: '0644'
-      ignore_errors: true
+        mode: '0600'
 
-    - name: Apply Calico networking
+    - name: Get join command for worker nodes
+      shell: kubeadm token create --print-join-command
+      register: join_command
+      changed_when: false
+      
+    - name: Fetch join command to Ansible host
+      local_action:
+        module: copy
+        content: "{{ join_command.stdout }}"
+        dest: "{{ playbook_dir }}/../scripts/k8s_join_command.sh"
+        mode: '0700'
       become: false
-      command: kubectl apply -f https://docs.projectcalico.org/manifests/calico.yaml
-      ignore_errors: true
 
     - name: Install bash-completion
       apt:
